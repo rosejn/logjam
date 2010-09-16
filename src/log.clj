@@ -6,11 +6,10 @@
      [clojure.contrib.trace :as trace]
      [clojure.contrib.io :as io]))
 
+(def writers* (ref {}))
+
 (def direct-logging?* (atom true))
 (def logging-agent* (agent nil))
-
-(def channels* (ref {::debug {:console console-writer }}))
-(def active-channels* (ref #{::debug}))
 
 (derive ::debug ::trace)
 (derive ::warn  ::debug)
@@ -18,33 +17,56 @@
 (derive ::fatal ::error)
 (derive ::info  ::fatal)
 
-(def console-writer println)
+(defn log->fn
+  ([channel fun] (log->fn (gensym) channel fun))
+  ([chan-key channel fun]
+   (dosync (alter writers* assoc channel
+                  (assoc (get @writers* chan-key {}) 
+                         chan-key 
+                         fun)))))
 
-(defn file-writer [path]
+(defn logged? [channel]
+  (not (nil? 
+         (some #(or (=  channel %) 
+                    (isa? channel %)) 
+               (keys @writers*)))))
+
+(defn- log-msg 
+  "Create a standard log message string."
+  [channel args]
+  (apply str (name channel) ": " (interpose " " args)))
+
+(def console-writer (fn [channel args] (println (log-msg channel args))))
+
+(defn log->console
+  ([channel] (log->console (gensym) channel))
+  ([chan-key channel]
+   (log->fn chan-key channel console-writer)
+   chan-key))
+
+(defn- file-writer [path]
   (let [w (io/append-writer path)]
     #(.write w %)))
 
-(defn log->file 
+(defn log->file
   ([channel path] (log->file (gensym) channel path))
   ([chan-key channel path]
-   (dosync (alter channels* assoc channel 
-                  (assoc (get channels* chan-key {}) 
-                         chan-key (file-writer path))))))
+   (log->fn chan-key channel (file-writer path))
+   chan-key)) 
 
-(defn log-stop 
+(defn log-stop
   [channel path]
-  (dosync alter channels* assoc ))
+  (dosync alter writers* assoc ))
 
 (defn- log-tree [channel msg]
-  (if-let [writers (get @channels* channel)]
+  (if-let [writers (get @writers* channel)]
     (doseq [[_ w] writers]
       (w msg))
     (doseq [chan (parents channel)]
       (log-tree chan msg))))
 
 (defn log-channel-write [channel & args]
-  (let [msg (apply str (interpose " " args))]
-    (log-tree channel msg)))
+  (log-tree channel (log-msg channel args)))
 
 (defmacro log
   "Log a message to the given channel."
@@ -55,20 +77,18 @@
        (fn [_# c# & args#] (apply log-channel-write c# args#))
        ~channel ~@args)))
 
-(def *SPY-CHANNEL* ::debug)
-
 (defmacro spy
     "Evaluates expr and outputs the form and its result to the debug log; returns
       the result of expr."
-    [expr]
-    `(let [a# ~expr] (log *SPY-CHANNEL* (str '~expr " => " a#)) a#))
+    [channel expr]
+    `(let [a# ~expr] (log ~channel (str '~expr " => " a#)) a#))
 
 ; Hook into c.c.trace functions, writing to a log channel
 (defmacro trace-log
   "Outputs the trace to a log channel."
   [channel trace-symbols & form])
 
-(def *old-std-streams* (ref nil))
+;(def *old-std-streams* (ref nil))
 
 (comment defn log-capture!
   "Captures System.out and System.err, redirecting all writes of those streams

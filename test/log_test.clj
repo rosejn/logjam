@@ -1,13 +1,13 @@
-(ns logjam.test.core
+(ns log-test
   (:use [log] :reload)
   (:use [clojure.test]))
 
-(defn up [v] 
+(defn up [v]
   (log ::up "Up input: " v)
- (+ 1 (* 3 v)))
+  (+ 1 (* 3 v)))
 
-(defn down [v] 
- (/ v 2))
+(defn down [v]
+  (spy ::down (/ v 2)))
 
 (defn collatz [v]
   (cond
