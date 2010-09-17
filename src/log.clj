@@ -3,8 +3,8 @@
       :doc "An experimental, task-based logging library."}
   log
   (:require
-     [clojure.contrib.trace :as trace]
-     [clojure.contrib.io :as io]))
+    [clojure.contrib.trace :as trace]
+    [clojure.contrib.io :as io]))
 
 (def writers* (ref {}))
 
@@ -21,60 +21,63 @@
   ([channel fun] (log->fn (gensym) channel fun))
   ([chan-key channel fun]
    (dosync (alter writers* assoc channel
-                  (assoc (get @writers* chan-key {}) 
-                         chan-key 
+                  (assoc (get @writers* chan-key {})
+                         chan-key
                          fun)))))
 
 (defn logged? [channel]
-  (not (nil? 
-         (some #(or (=  channel %) 
-                    (isa? channel %)) 
+  (not (nil?
+         (some #(or (=  channel %)
+                    (isa? channel %))
                (keys @writers*)))))
 
-(defn- log-msg 
+(defn- log-msg
   "Create a standard log message string."
   [channel args]
   (apply str (name channel) ": " (interpose " " args)))
 
-(def console-writer (fn [channel args] (println (log-msg channel args))))
-
-(defn log->console
-  ([channel] (log->console (gensym) channel))
-  ([chan-key channel]
-   (log->fn chan-key channel console-writer)
-   chan-key))
+(defn- console-writer []
+  (fn [chan args] 
+    (println (log-msg chan args))))
 
 (defn- file-writer [path]
   (let [w (io/append-writer path)]
-    #(.write w %)))
+    (fn [chan args] 
+      (.write w (log-msg chan args)))))
+
+(defn log->console
+  ([channel] 
+   (log->console (gensym) channel))
+  ([chan-key channel]
+   (log->fn chan-key channel (console-writer))
+   chan-key))
 
 (defn log->file
   ([channel path] (log->file (gensym) channel path))
   ([chan-key channel path]
    (log->fn chan-key channel (file-writer path))
-   chan-key)) 
+   chan-key))
 
-(defn log-stop
-  [channel path]
-  (dosync alter writers* assoc ))
+(def log->url log->file)
 
-(defn- log-tree [channel msg]
+(defn log-clear-writers
+  [channel]
+  (dosync (ref-set writers* {})))
+
+(defn log-tree [channel args]
   (if-let [writers (get @writers* channel)]
     (doseq [[_ w] writers]
-      (w msg))
+      (w channel args)) ; call the writers for this channel
     (doseq [chan (parents channel)]
-      (log-tree chan msg))))
-
-(defn log-channel-write [channel & args]
-  (log-tree channel (log-msg channel args)))
+      (log-tree chan args)))) ; recurse up to the first parent 
 
 (defmacro log
   "Log a message to the given channel."
   [channel & args]
   `(if @direct-logging?*
-     (log-channel-write ~channel ~@args)
+     (log-tree ~channel '~args)
      (send-off logging-agent*
-       (fn [_# c# & args#] (apply log-channel-write c# args#))
+       (fn [_# c# & args#] (apply log-tree c# args#))
        ~channel ~@args)))
 
 (defmacro spy
