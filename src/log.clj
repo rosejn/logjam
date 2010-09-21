@@ -34,23 +34,35 @@
 (defn- log-msg
   "Create a standard log message string."
   [channel args]
-  (apply str (name channel) ": " (interpose " " args)))
+  (if (not= (first args) :close)
+    (apply str (name channel) ": " (interpose " " args))))
 
 (defn- console-writer []
-  (fn [chan args] 
+  (fn [chan args]
     (println (log-msg chan args))))
 
 (defn- file-writer [path]
-  (let [w (io/append-writer path)]
-    (fn [chan args] 
-      (.write w (log-msg chan args)))))
+  (let [w (io/writer path)]
+    (fn [chan args]
+      (if (= (first args) :close)
+        (.close w)
+        (do 
+          (.write w (log-msg chan args))
+          (.write w "\n"))))))
 
 (defn log->console
-  ([channel] 
+  ([channel]
    (log->console (gensym) channel))
   ([chan-key channel]
    (log->fn chan-key channel (console-writer))
    chan-key))
+
+(defn log-remove-writer [chan-key channel]
+  (dosync 
+    (alter writers* assoc channel
+                 (dissoc (get writers* channel {}) chan-key))
+    (if (empty? (get writers* channel))
+      (alter writers* dissoc channel))))
 
 (defn log->file
   ([channel path] (log->file (gensym) channel path))
@@ -58,18 +70,21 @@
    (log->fn chan-key channel (file-writer path))
    chan-key))
 
-(def log->url log->file)
-
 (defn log-clear-writers
   [channel]
+  (dosync (alter writers* dissoc channel)))
+
+(defn log-clear-all-writers []
   (dosync (ref-set writers* {})))
 
-(defn log-tree [channel args]
-  (if-let [writers (get @writers* channel)]
-    (doseq [[_ w] writers]
-      (w channel args)) ; call the writers for this channel
-    (doseq [chan (parents channel)]
-      (log-tree chan args)))) ; recurse up to the first parent 
+(defn log-tree 
+  ([channel args] (log-tree channel channel args))
+  ([log-chan chan args]
+   (if-let [writers (get @writers* chan)]
+     (doseq [[_ w] writers]
+       (w log-chan args)) ; call the writers for this channel
+     (doseq [chan (parents chan)]
+       (log-tree log-chan chan args))))) ; recurse up to the first parent
 
 (defmacro log
   "Log a message to the given channel."
