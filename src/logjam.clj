@@ -4,7 +4,10 @@
   logjam
   (:require
     [clojure.contrib.trace :as trace]
-    [clojure.contrib.io :as io]))
+    [clojure.contrib.io :as io]
+    [clojure.contrib.server-socket :as sock])
+  (:import
+    [java.net Socket]))
 
 (defonce writers* (ref {}))
 
@@ -25,22 +28,28 @@
   (keyword "logjam" (name kw)))
 
 (defn channel
-  "Create a new log channel deriving from a parent channel, which defaults to :info
-  if no parent channel is specified."
+  "Create a new log channel deriving from a parent channel, which 
+  defaults to :info if no parent channel is specified."
   ([child] (channel child :info))
   ([child parent]
    (dosync (ref-set channel-tree*
-                    (derive @channel-tree* (chan-name child) (chan-name parent))))))
+                    (derive @channel-tree* 
+                            (chan-name child) 
+                            (chan-name parent))))))
 
 (defn add-writer 
-  ([channel fun] (add-writer (gensym) channel fun))
-  ([chan-key channel fun]
+  "Add a log writer to a log channel."
+  ([channel writer] 
+   (add-writer (gensym) channel writer))
+  ([chan-key channel writer]
    (dosync (alter writers* assoc (chan-name channel)
                   (assoc (get @writers* chan-key {})
                          chan-key
-                         fun)))))
+                         writer)))))
 
-(defn written? [channel]
+(defn written? 
+  "Are there any writers registered for this channel?"
+  [channel]
   (let [channel (chan-name channel)]
     (not (nil?
            (some #(or (= channel %)
@@ -53,27 +62,53 @@
   (if (not= (first args) :close)
     (apply str (name channel) ": " (interpose " " args))))
 
-(defn- console-writer []
+(defn- console-writer 
+  "Returns a basic console writer function."
+  []
   (fn [chan args]
     (println (log-msg chan args))))
 
-(defn- file-writer [path]
-  (let [w (io/writer path)]
+(defn- base-writer 
+  "A basic writer that uses expects an io/writer (java.io.Writer)."
+  [writer]
+  (fn [chan args]
+    (if (= (first args) :close)
+      (.close writer)
+      (do
+        (.write writer (log-msg chan args))
+        (.write writer "\n")))))
+
+(defn- file-writer 
+  "Returns a file based writer function configured to write to the
+  file located at path."
+  [path]
+  (base-writer (io/writer path)))
+
+(defn- socket-writer
+  [host port]
+  (let [writer (io/writer (Socket. host port))]
     (fn [chan args]
-      (if (= (first args) :close)
-        (.close w)
-        (do
-          (.write w (log-msg chan args))
-          (.write w "\n"))))))
+      (.write writer (prn-str {:type :logjam-msg 
+                               :channel chan 
+                               :args args})))))
 
 (defn console
+  "Setup a log channel to output to the console.  Optionally accepts
+  a channel key, which can be used to remove this console writer
+  in the future.
+  
+  (log/console :data-importer)
+  (log/console :"
+
   ([channel]
-   (console (gensym) channel))
-  ([chan-key channel]
+   (console channel (gensym)))
+  ([channel chan-key]
    (add-writer chan-key channel (console-writer))
    chan-key))
 
-(defn remove-writer [chan-key channel]
+(defn remove-writer 
+  "Remove the writer registered with a channel-key for a channel."
+  [channel chan-key]
   (let [channel (chan-name channel)]
     (dosync
       (alter writers* assoc channel
@@ -88,6 +123,13 @@
      (add-writer chan-key channel (file-writer path))
      chan-key)))
 
+(defn socket
+  ([channel host port] (socket channel host port (gensym)))
+  ([channel host port chan-key]
+   (let [channel (chan-name channel)]
+     (add-writer chan-key channel (socket-writer host port))
+     chan-key)))
+
 (defn clear-writers
   [channel]
   (let [channel (chan-name channel)]
@@ -97,7 +139,8 @@
   (dosync (ref-set writers* {})))
 
 ; TODO: This should probably be done using recur so we can handle any
-; depth of hierarchy...
+; depth of hierarchy... (Although no sane logging system would have
+; more than a couple levels.)
 (defn log-event
   "Used internally to determine all channels that a log event needs to be 
   published too."
@@ -110,6 +153,29 @@
          (w base-chan args)) ; call the writers for this channel
        (doseq [parent (parents @channel-tree* channel)]
          (log-event base-chan parent args)))))) ; recurse up to the first parent
+
+(def LOG-SERVER-PORT 4242)
+
+(defn- log-server-handler [running?]
+  (fn [in out]
+    (binding [*in* (io/reader in)
+              *out* (io/writer out)]
+      (try (loop [msg (read-line)]
+             (println "got msg: " msg)
+             (when (and @running? msg)
+               (log-event (:channel msg) (:args msg))
+               (recur (read-line))))
+        (finally 
+          (.close *in*)
+          (.close *out*))))))
+
+(defn server 
+  ([] (server LOG-SERVER-PORT))
+  ([port]
+   (let [running? (atom true)]
+     (sock/create-server (Integer. port) 
+                         (log-server-handler running?))
+     (fn [] (reset! running? false)))))
 
 (defmacro to 
   "Log a message to the given channel."

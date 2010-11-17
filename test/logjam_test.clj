@@ -30,7 +30,7 @@
     (log/clear-writers :test-channel)
     (log/add-writer :test-key :test-channel-b func)
     (is (log/written? :test-channel-b))
-    (log/remove-writer :test-key :test-channel-b)
+    (log/remove-writer :test-channel-b :test-key)
     (is (not (log/written? :test-channel-b)))
     ))
 
@@ -44,7 +44,14 @@
         c (with-out-str (log/to :c "foo"))]
     (is (= a ""))
     (is (= b "b: foo\n"))
-    (is (= c "c: foo\n"))))
+    (is (= c "c: foo\n")))
+  
+  (log/console :a :a-test-key)
+  (let [a1 (with-out-str (log/to :a "foo"))
+        _ (log/remove-writer :a :a-test-key)
+        a2 (with-out-str (log/to :a "bar"))]
+    (is (= a1 "a: foo\n"))
+    (is (= a2 ""))))
 
 (deftest file-log-test
   (log/file :b "test-log")
