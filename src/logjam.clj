@@ -4,7 +4,7 @@
   logjam
   (:require
     [clojure.contrib.trace :as trace]
-    [clojure.contrib.io :as io]
+    [clojure.java.io :as io]
     [clojure.contrib.server-socket :as sock])
   (:import
     [java.net Socket]))
@@ -76,13 +76,14 @@
       (.close writer)
       (do
         (.write writer (log-msg chan args))
-        (.write writer "\n")))))
+        (.write writer "\n")
+        (.flush writer)))))
 
 (defn- file-writer 
   "Returns a file based writer function configured to write to the
   file located at path."
   [path]
-  (base-writer (io/writer path)))
+  (base-writer (io/writer path :append true)))
 
 (defn- socket-writer
   [host port]
@@ -154,18 +155,33 @@
        (doseq [parent (parents @channel-tree* channel)]
          (log-event base-chan parent args)))))) ; recurse up to the first parent
 
+(defmacro to 
+  "Log a message to the given channel."
+  [channel & args]
+  `(if @direct-logging?*
+     (log-event ~channel ~@args)
+     (send-off logging-agent*
+       (fn [_# c# & args#] (log-event c# args#))
+       ~channel ~@args)))
+
 (def LOG-SERVER-PORT 4242)
+
+(defonce foo (file :server "server.log"))
 
 (defn- log-server-handler [running?]
   (fn [in out]
     (binding [*in* (io/reader in)
               *out* (io/writer out)]
       (try (loop [msg (read-line)]
-             (println "got msg: " msg)
-             (when (and @running? msg)
-               (log-event (:channel msg) (:args msg))
-               (recur (read-line))))
-        (finally 
+             (to :server "got msg: " msg)
+             (to :server "type: " (type msg))
+             (when (and @running? (map? msg))
+               (log-event (:channel msg) (:args msg)))
+             (recur (read-line)))
+        (catch Exception e
+          (to :server "Got Exception: " e)
+          (to :server (str (with-out-str (.printStackTrace e)))))
+        (finally
           (.close *in*)
           (.close *out*))))))
 
@@ -176,15 +192,6 @@
      (sock/create-server (Integer. port) 
                          (log-server-handler running?))
      (fn [] (reset! running? false)))))
-
-(defmacro to 
-  "Log a message to the given channel."
-  [channel & args]
-  `(if @direct-logging?*
-     (log-event ~channel '~args)
-     (send-off logging-agent*
-       (fn [_# c# & args#] (log-event c# args#))
-       ~channel ~@args)))
 
 (defmacro spy
     "Evaluates expr and outputs the form and its result to the debug log; returns
