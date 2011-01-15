@@ -1,9 +1,11 @@
-(ns logjam-test
+(ns logjam.core-test
   (:use clojure.test
         clojure.stacktrace
-        clojure.contrib.repl-utils)
-  (:require :reload [logjam.core :as log])
-  (:require [clojure.contrib.io :as io]))
+        clojure.contrib.repl-utils
+        [clojure.java.io :only (delete-file)])
+  (:require :reload
+            [logjam.core :as log]
+            [clojure.contrib.io :as io]))
 
 (log/channel :collatz :debug)
 (log/channel :up      :collatz)
@@ -30,7 +32,7 @@
     (log/clear-writers :test-channel)
     (log/add-writer :test-key :test-channel-b func)
     (is (log/written? :test-channel-b))
-    (log/remove-writer :test-key :test-channel-b)
+    (log/remove-writer :test-channel-b :test-key)
     (is (not (log/written? :test-channel-b)))
     ))
 
@@ -43,20 +45,30 @@
         b (with-out-str (log/to :b "foo"))
         c (with-out-str (log/to :c "foo"))]
     (is (= a ""))
-    (is (= b "b: foo\n"))
-    (is (= c "c: foo\n"))))
+    (is (= b "[b] foo\n"))
+    (is (= c "[c] foo\n")))
+
+  (log/console :a :a-test-key)
+  (let [a1 (with-out-str (log/to :a "foo"))
+        _ (log/remove-writer :a :a-test-key)
+        a2 (with-out-str (log/to :a "bar"))]
+    (is (= a1 "[a] foo\n"))
+    (is (= a2 ""))))
 
 (deftest file-log-test
-  (log/file :b "test-log")
-  (log/to :a "a")
-  (log/to :b "b stuff")
-  (log/to :c "c message")
-  (log/to :b :close)
-  (let [lines (io/read-lines "test-log")
-        b (first lines)
-        c (second lines)]
-    (is (= b "b: b stuff"))
-    (is (= c "c: c message"))))
+  (try
+    (log/file :b "test-log")
+    (log/to :a "a")
+    (log/to :b "b stuff")
+    (log/to :c "c message")
+    (log/to :b :close)
+    (let [lines (io/read-lines "test-log")
+          b (first lines)
+          c (second lines)]
+      (is (= b "[b] b stuff"))
+      (is (= c "[c] c message")))
+    (finally
+      (delete-file "test-log"))))
 
 (defn- spyer []
   (log/spy :spying
@@ -64,9 +76,9 @@
           b (/ a 23.3)
           c (name :asdf)
           d (map #(* % %) (range 10))]
-      (+ a b c d))))
+      (apply str a b c d))))
 
-(deftest spy-test
+(comment deftest spy-test
   (log/console :spying)
   (let [res (with-out-str (spyer))]
     (is (= res "spying: a "))))
@@ -80,5 +92,5 @@
 
 (defn logjam-tests []
   (binding [*test-out* *out*]
-    (run-tests 'logjam-test)))
+    (run-tests 'logjam.core-test)))
 

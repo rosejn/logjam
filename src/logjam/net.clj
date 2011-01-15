@@ -1,7 +1,7 @@
 (ns logjam.net
-  (require [logjam :as log])
+  (require [logjam.core :as log])
   (:import
-    [java.net InetAddress InetSocketAddress SocketAddress 
+    [java.net InetAddress InetSocketAddress SocketAddress
      DatagramPacket DatagramSocket]
     [java.nio ByteBuffer CharBuffer]
     [java.nio.channels Channel DatagramChannel SelectionKey Selector
@@ -15,7 +15,7 @@
 
 (def ERROR (atom nil))
 
-(defn- server-loop 
+(defn- server-loop
   [{:keys [listening? tcp-chan udp-chan selector tcp-clients] :as s}]
   (try
   (let [recv-buf  (ByteBuffer/allocate MAX-LOG-EVENT-SIZE)
@@ -38,12 +38,12 @@
                   (.flip recv-buf)
                   (let [recv-str (.toString (.decode decoder recv-buf))
                         {:keys [channel args]} (read-string recv-str)]
-                (logjam/log-event channel args)))))))
+                (logjam.core/log-event channel args)))))))
         (catch java.io.IOException e
           (log/to :server "got IO error: " e)))))
     (catch Exception e
       (reset! ERROR e)
-      (log/to :server "Got exception in server-loop: " 
+      (log/to :server "Got exception in server-loop: "
               (let [err (java.io.StringWriter.)]
               (binding [*err* err]
                 (.printStackTrace e))
