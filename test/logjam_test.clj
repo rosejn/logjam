@@ -2,7 +2,7 @@
   (:use clojure.test
         clojure.stacktrace
         clojure.contrib.repl-utils)
-  (:require :reload [logjam :as log])
+  (:require :reload [logjam.core :as log])
   (:require [clojure.contrib.io :as io]))
 
 (log/channel :collatz :debug)
@@ -58,11 +58,23 @@
     (is (= b "b: b stuff"))
     (is (= c "c: c message"))))
 
+(defn- spyer []
+  (log/spy :spying
+    (let [a (+ 1 234)
+          b (/ a 23.3)
+          c (name :asdf)
+          d (map #(* % %) (range 10))]
+      (+ a b c d))))
+
+(deftest spy-test
+  (log/console :spying)
+  (let [res (with-out-str (spyer))]
+    (is (= res "spying: a "))))
+
 (defn log-test-fixture [f]
-;  (log/clear-all-writers)
+  (log/clear-all-writers)
   (f)
- ; (log/clear-all-writers)
-  )
+  (log/clear-all-writers))
 
 (use-fixtures :each log-test-fixture)
 

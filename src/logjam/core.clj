@@ -1,15 +1,19 @@
 (ns
    #^{:author "Jeff Rose, borrowing code from clojure.contrib.logging"
       :doc "An experimental, task-based logging library."}
-  logjam
+  logjam.core
+  (:use clansi.core)
   (:require
     [clojure.contrib.trace :as trace]
     [clojure.contrib.io :as io]))
 
 (defonce writers* (ref {}))
-
+(defonce color?* (atom false))
 (defonce direct-logging?* (atom true))
 (defonce logging-agent* (agent nil))
+
+(defn in-color [& [color]]
+  (reset! color?* (if (false? color) false true)))
 
 (defn default-channel-tree []
   (-> (make-hierarchy)
@@ -32,7 +36,7 @@
    (dosync (ref-set channel-tree*
                     (derive @channel-tree* (chan-name child) (chan-name parent))))))
 
-(defn add-writer 
+(defn add-writer
   ([channel fun] (add-writer (gensym) channel fun))
   ([chan-key channel fun]
    (dosync (alter writers* assoc (chan-name channel)
@@ -51,7 +55,14 @@
   "Create a standard log message string."
   [channel args]
   (if (not= (first args) :close)
-    (apply str (name channel) ": " (interpose " " args))))
+    (if @color?*
+      (apply str
+             (style "[" :red)
+             (name channel)
+             (style "]" :red) " "
+             (interpose " " args))
+      (apply str (name channel) " "
+             (interpose " " args)))))
 
 (defn- console-writer []
   (fn [chan args]
@@ -99,9 +110,9 @@
 ; TODO: This should probably be done using recur so we can handle any
 ; depth of hierarchy...
 (defn log-event
-  "Used internally to determine all channels that a log event needs to be 
+  "Used internally to determine all channels that a log event needs to be
   published too."
-  ([channel args] 
+  ([channel args]
      (log-event channel channel args))
   ([base-chan channel args]
    (let [channel (chan-name channel)]
@@ -111,20 +122,39 @@
        (doseq [parent (parents @channel-tree* channel)]
          (log-event base-chan parent args)))))) ; recurse up to the first parent
 
-(defmacro to 
+(defmacro to
   "Log a message to the given channel."
   [channel & args]
   `(if @direct-logging?*
-     (log-event ~channel '~args)
+     (log-event ~channel (list ~@args))
      (send-off logging-agent*
        (fn [_# c# & args#] (log-event c# args#))
        ~channel ~@args)))
 
+(defmacro def-let
+  "like let, but binds the expressions globally."
+  [bindings & more]
+  (let [let-expr (macroexpand `(let ~bindings))
+        names-values (partition 2 (second let-expr))
+        defs   (map #(cons 'def %) names-values)]
+    (concat (list 'do) defs more)))
+
 (defmacro spy
-    "Evaluates expr and outputs the form and its result to the debug log; returns
-      the result of expr."
-    [channel expr]
-    `(let [a# ~expr] (to ~channel (str '~expr " => " a#)) a#))
+  "Evaluates expr and outputs the form and its result to a channel.
+  Returns the result of expr."
+  [channel expr]
+  (if (= 'let (first expr))
+    (let [bindings (second expr)
+          body (drop 2 expr)
+          let-expr (macroexpand `(let ~bindings))
+          names-values (partition 2 (second let-expr))
+          logs (mapcat (fn [[name value]]
+                         `["\n  " (str (quote ~name) ":") ~value])
+                       names-values)
+          log (concat `(to ~channel "\nlet:") logs)]
+      (concat (list 'let (vec bindings) log) body))
+    `(let [a# ~expr]
+       (to ~channel (str '~expr " => " a#)) a#)))
 
 ; Hook into c.c.trace functions, writing to a log channel
 (defmacro trace
