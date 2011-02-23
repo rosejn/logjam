@@ -1,6 +1,8 @@
 (ns logjam.net
-  (require [logjam.core :as log])
+  (require [logjam.core :as log]
+           [clojure.contrib.server-socket :as sock])
   (:import
+    [java.net Socket]
     [java.net InetAddress InetSocketAddress SocketAddress
      DatagramPacket DatagramSocket]
     [java.nio ByteBuffer CharBuffer]
@@ -93,3 +95,19 @@
             bytes (.getBytes msg)
             size (count bytes)]
         (.send sock (DatagramPacket. bytes size addr port)))))))
+
+(defn- socket-writer
+  [host port]
+  (let [writer (io/writer (Socket. host port))]
+    (fn [chan args]
+      (.write writer (prn-str {:type :logjam-msg
+                               :channel chan
+                               :args args})))))
+
+(defn socket
+  ([channel host port] (socket channel host port (gensym)))
+  ([channel host port chan-key]
+   (let [channel (chan-name channel)]
+     (add-writer chan-key channel (socket-writer host port))
+     chan-key)))
+

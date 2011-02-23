@@ -2,13 +2,11 @@
    #^{:author "Jeff Rose, borrowing code from clojure.contrib.logging"
       :doc "An experimental, task-based logging library."}
   logjam.core
+  (:refer-clojure :exclude [println format])
   (:use clansi.core)
   (:require
     [clojure.contrib.trace :as trace]
-    [clojure.java.io :as io]
-    [clojure.contrib.server-socket :as sock])
-  (:import
-    [java.net Socket]))
+    [clojure.java.io :as io]))
 
 (defonce writers* (ref {}))
 (defonce color?* (atom false))
@@ -62,22 +60,25 @@
 
 (defn- log-msg
   "Create a standard log message string."
-  [channel args]
-  (if (not= (first args) :close)
-    (if @color?*
-      (apply str
-             (style "[" :red)
-             (name channel)
-             (style "]" :red) " "
-             (interpose " " args))
-      (apply str "[" (name channel) "] "
-             (interpose " " args)))))
+  [label args]
+  (let [args (map #(if (nil? %) "nil" %) args)]
+    (if (not= (first args) :close)
+      (if @color?*
+        (apply str
+               (style "[" :red)
+               label
+               (style "]" :red) " "
+               (interpose " " args))
+        (apply str "[" label "] "
+               (interpose " " args))))))
 
 (defn- console-writer
   "Returns a basic console writer function."
   []
-  (fn [chan args]
-    (println (log-msg chan args))))
+  (let [c-out *out*]
+    (fn [chan args]
+      (binding [*out* c-out]
+        (clojure.core/println (log-msg chan args))))))
 
 (defn- base-writer
   "A basic writer that uses expects an io/writer (java.io.Writer)."
@@ -96,27 +97,29 @@
   [path]
   (base-writer (io/writer path :append true)))
 
-(defn- socket-writer
-  [host port]
-  (let [writer (io/writer (Socket. host port))]
-    (fn [chan args]
-      (.write writer (prn-str {:type :logjam-msg
-                               :channel chan
-                               :args args})))))
-
 (defn console
   "Setup a log channel to output to the console.  Optionally accepts
   a channel key, which can be used to remove this console writer
   in the future.
 
   (log/console :data-importer)
-  (log/console :"
-
+  "
   ([channel]
    (console channel (gensym)))
   ([channel chan-key]
    (add-writer chan-key channel (console-writer))
    chan-key))
+
+(defn system
+  "Log output to the System/out.
+
+  This works in the nailgun repl of vimclojure, but might be more
+  generally useful elsewhere."
+  ([channel]
+   (system channel (gensym)))
+  ([channel chan-key]
+   (add-writer chan-key channel
+               (fn [chan args] (.println System/out (log-msg chan args))))))
 
 (defn remove-writer
   "Remove the writer registered with a channel-key for a channel."
@@ -133,13 +136,6 @@
   ([chan-key channel path]
    (let [channel (chan-name channel)]
      (add-writer chan-key channel (file-writer path))
-     chan-key)))
-
-(defn socket
-  ([channel host port] (socket channel host port (gensym)))
-  ([channel host port chan-key]
-   (let [channel (chan-name channel)]
-     (add-writer chan-key channel (socket-writer host port))
      chan-key)))
 
 (defn clear-writers
@@ -162,11 +158,11 @@
    (let [channel (chan-name channel)]
      (if-let [writers (get @writers* channel)]
        (doseq [[_ w] writers]
-         (w base-chan args)) ; call the writers for this channel
+         (w (name base-chan) args)) ; call the writers for this channel
        (doseq [parent (parents @channel-tree* channel)]
          (log-event base-chan parent args)))))) ; recurse up to the first parent
 
-(defmacro to
+(defmacro println
   "Log a message to the given channel."
   [channel & args]
   `(if @direct-logging?*
@@ -174,6 +170,17 @@
      (send-off logging-agent*
        (fn [_# c# & args#] (log-event c# args#))
        ~channel ~@args)))
+
+(defmacro to [& args] `(println ~@args))
+
+(defmacro format
+  "Log a formatted message to the given channel."
+  [channel fmt & args]
+  `(if @direct-logging?*
+     (log-event ~channel [(clojure.core/format ~fmt ~@args)])
+     (send-off logging-agent*
+       (fn [_# c# fmt# args#] (log-event c# [(apply clojure.core/format fmt# args#)]))
+       ~channel ~fmt [~@args])))
 
 (defmacro def-let
   "like let, but binds the expressions globally."
@@ -200,7 +207,7 @@
     `(let [a# ~expr]
        (to ~channel (str '~expr " => " a#)) a#)))
 
-; Hook into c.c.trace functions, writing to a log channel
+; TODO: Hook into c.c.trace functions, writing to a log channel
 (defmacro trace
   "Outputs the trace to a log channel."
   [channel trace-symbols & form])
