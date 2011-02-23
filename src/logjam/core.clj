@@ -72,7 +72,7 @@
         (apply str "[" label "] "
                (interpose " " args))))))
 
-(defn- console-writer
+(defn console-writer
   "Returns a basic console writer function."
   []
   (let [c-out *out*]
@@ -91,7 +91,7 @@
         (.write writer "\n")
         (.flush writer)))))
 
-(defn- file-writer
+(defn file-writer
   "Returns a file based writer function configured to write to the
   file located at path."
   [path]
@@ -110,6 +110,10 @@
    (add-writer chan-key channel (console-writer))
    chan-key))
 
+(defn system-writer
+  []
+  (fn [chan args] (.println System/out (log-msg chan args))))
+
 (defn system
   "Log output to the System/out.
 
@@ -118,8 +122,7 @@
   ([channel]
    (system channel (gensym)))
   ([channel chan-key]
-   (add-writer chan-key channel
-               (fn [chan args] (.println System/out (log-msg chan args))))))
+   (add-writer chan-key channel (system-writer))))
 
 (defn remove-writer
   "Remove the writer registered with a channel-key for a channel."
@@ -132,8 +135,8 @@
         (alter writers* dissoc channel)))))
 
 (defn file
-  ([channel path] (file (gensym) channel path))
-  ([chan-key channel path]
+  ([channel path] (file channel path (gensym)))
+  ([channel path chan-key]
    (let [channel (chan-name channel)]
      (add-writer chan-key channel (file-writer path))
      chan-key)))
