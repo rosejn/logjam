@@ -82,12 +82,12 @@
 
 (defn- base-writer
   "A basic writer that uses expects an io/writer (java.io.Writer)."
-  [writer]
+  [^java.io.Writer writer]
   (fn [chan args]
     (if (= (first args) :close)
       (.close writer)
       (do
-        (.write writer (log-msg chan args))
+        (.write writer ^String (log-msg chan args))
         (.write writer "\n")
         (.flush writer)))))
 
