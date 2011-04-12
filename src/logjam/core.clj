@@ -3,7 +3,8 @@
       :doc "An experimental, task-based logging library."}
   logjam.core
   (:refer-clojure :exclude [println format])
-  (:use clansi.core)
+  (:use clansi.core
+        [clojure.contrib.core :only (dissoc-in)])
   (:require
     [clojure.contrib.trace :as trace]
     [clojure.java.io :as io]))
@@ -26,6 +27,11 @@
 
 (defonce channel-tree* (ref (default-channel-tree)))
 
+(defn reset-channels
+  []
+  (dosync (ref-set channel-tree* (default-channel-tree)))
+  :reset)
+
 (defn- chan-name [kw]
   (keyword "logjam" (name kw)))
 
@@ -41,13 +47,10 @@
 
 (defn add-writer
   "Add a log writer to a log channel."
-  ([channel writer]
-   (add-writer (gensym) channel writer))
   ([chan-key channel writer]
-   (dosync (alter writers* assoc (chan-name channel)
-                  (assoc (get @writers* chan-key {})
-                         chan-key
-                         writer)))))
+   (dosync (alter writers*
+                  update-in [(chan-name channel)]
+                  #(assoc % chan-key writer)))))
 
 (defn written?
   "Are there any writers registered for this channel?"
@@ -72,14 +75,6 @@
         (apply str "[" label "] "
                (interpose " " args))))))
 
-(defn console-writer
-  "Returns a basic console writer function."
-  []
-  (let [c-out *out*]
-    (fn [chan args]
-      (binding [*out* c-out]
-        (clojure.core/println (log-msg chan args))))))
-
 (defn- base-writer
   "A basic writer that uses expects an io/writer (java.io.Writer)."
   [^java.io.Writer writer]
@@ -91,38 +86,63 @@
         (.write writer "\n")
         (.flush writer)))))
 
+
+(defn console-writer
+  "Returns a basic console writer function."
+  []
+  (let [c-out *out*]
+    (fn [chan args]
+      (binding [*out* c-out]
+        (clojure.core/println (log-msg chan args))))))
+
+(defn console
+  "Setup a log channel to output to the console.
+    (log/console :data-importer)
+  "
+  ([channels]
+   (console channels :console))
+  ([channels chan-key]
+   (let [channels (if (coll? channels)
+                    channels
+                    [channels])]
+     (doseq [channel channels]
+       (add-writer chan-key channel (console-writer))
+       chan-key))))
+
+(defn repl-writer
+  [out-stream]
+  (fn [chan args] (.println out-stream (log-msg chan args))))
+
+(defn repl
+  "Log output to the System/out.
+
+  This works in the nailgun repl of vimclojure, but might be more
+  generally useful elsewhere."
+  ([channels]
+   (repl channels :repl))
+  ([channels chan-key]
+   (let [channels (if (coll? channels)
+                    channels
+                    [channels])]
+     (doseq [channel channels]
+       (add-writer chan-key channel (repl-writer System/out))))))
+
 (defn file-writer
   "Returns a file based writer function configured to write to the
   file located at path."
   [path]
   (base-writer (io/writer path :append true)))
 
-(defn console
-  "Setup a log channel to output to the console.  Optionally accepts
-  a channel key, which can be used to remove this console writer
-  in the future.
-
-  (log/console :data-importer)
-  "
-  ([channel]
-   (console channel (gensym)))
-  ([channel chan-key]
-   (add-writer chan-key channel (console-writer))
-   chan-key))
-
-(defn system-writer
-  []
-  (fn [chan args] (.println System/out (log-msg chan args))))
-
-(defn system
-  "Log output to the System/out.
-
-  This works in the nailgun repl of vimclojure, but might be more
-  generally useful elsewhere."
-  ([channel]
-   (system channel (gensym)))
-  ([channel chan-key]
-   (add-writer chan-key channel (system-writer))))
+(defn file
+  ([channels path] (file channels path :file))
+  ([channels path chan-key]
+   (let [channels (if (coll? channels)
+                    channels
+                    [channels])
+         names (map chan-name channels)]
+     (doseq [ch-name names]
+       (add-writer chan-key ch-name (file-writer path))
+       chan-key))))
 
 (defn remove-writer
   "Remove the writer registered with a channel-key for a channel."
@@ -133,13 +153,6 @@
              (dissoc (get writers* channel {}) chan-key))
       (if (empty? (get writers* channel))
         (alter writers* dissoc channel)))))
-
-(defn file
-  ([channel path] (file channel path (gensym)))
-  ([channel path chan-key]
-   (let [channel (chan-name channel)]
-     (add-writer chan-key channel (file-writer path))
-     chan-key)))
 
 (defn clear-writers
   [channel]
